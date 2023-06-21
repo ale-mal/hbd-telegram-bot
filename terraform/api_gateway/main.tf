@@ -6,21 +6,7 @@ resource "aws_iam_policy" "api_gateway_policy" {
 
 resource "aws_iam_role" "api_gateway_role" {
   name = "APIGatewayRole"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Sid    = ""
-        Principal = {
-          Service = "apigateway.amazonaws.com"
-        }
-      },
-    ]
-  })
-
+  assume_role_policy = data.aws_iam_policy_document.assume_api_gateway_role.json
   managed_policy_arns = [aws_iam_policy.api_gateway_policy.arn]
 }
 

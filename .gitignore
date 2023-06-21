@@ -54,3 +54,6 @@ terraform.rc
 
 # Go workspace file
 go.work
+
+# Custom
+**/bin/*

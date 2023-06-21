@@ -9,3 +9,9 @@ module "api_gateway" {
   sqs_name = module.message_queue.sqs_name
   sqs_arn  = module.message_queue.sqs_arn
 }
+
+module "lambda" {
+  source      = "./lambda"
+  lambda_name = "message_lambda"
+  sqs_arn     = module.message_queue.sqs_arn
+}
