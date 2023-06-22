@@ -15,9 +15,9 @@ data "aws_iam_policy_document" "assume_api_gateway_role" {
 data "aws_iam_policy_document" "api_gateway_policy" {
   statement {
     actions = [
-      "sqs:SendMessage",
+      "kinesis:PutRecord",
     ]
     effect    = "Allow"
-    resources = [var.sqs_arn]
+    resources = [var.stream_arn]
   }
 }

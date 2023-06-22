@@ -25,9 +25,8 @@ resource "aws_lambda_function" "lambda" {
 }
 
 resource "aws_lambda_event_source_mapping" "event_mapping" {
-  event_source_arn                   = var.sqs_arn
-  function_name                      = aws_lambda_function.lambda.function_name
-  enabled                            = true
-  batch_size                         = 1
-  maximum_batching_window_in_seconds = 1
+  event_source_arn  = var.stream_arn
+  function_name     = aws_lambda_function.lambda.function_name
+  enabled           = true
+  starting_position = "LATEST"
 }

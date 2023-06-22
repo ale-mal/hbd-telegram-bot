@@ -3,7 +3,7 @@ variable "lambda_name" {
   type        = string
 }
 
-variable "sqs_arn" {
-  description = "The ARN of the SQS queue"
+variable "stream_arn" {
+  description = "The ARN of the Kinesis stream"
   type        = string
 }

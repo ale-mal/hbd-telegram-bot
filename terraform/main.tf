@@ -1,25 +1,19 @@
-module "dead_message_queue" {
-  source     = "./sqs"
-  queue_name = "dead_message_queue"
-}
-
-module "message_queue" {
-  source                = "./sqs"
-  queue_name            = "message_queue"
-  dead_letter_queue_arn = module.dead_message_queue.sqs_arn
+module "kinesis" {
+  source      = "./kinesis"
+  stream_name = "message_stream"
 }
 
 module "api_gateway" {
-  source   = "./api_gateway"
-  api_name = "message_api"
-  sqs_name = module.message_queue.sqs_name
-  sqs_arn  = module.message_queue.sqs_arn
+  source      = "./api_gateway"
+  api_name    = "message_api"
+  stream_arn  = module.kinesis.stream_arn
+  stream_name = module.kinesis.stream_name
 }
 
 module "lambda" {
-  source       = "./lambda"
-  lambda_name  = "message_lambda"
-  sqs_arn      = module.message_queue.sqs_arn
+  source      = "./lambda"
+  lambda_name = "message_lambda"
+  stream_arn  = module.kinesis.stream_arn
 }
 
 module "secret_manager" {

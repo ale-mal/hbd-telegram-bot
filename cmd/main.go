@@ -39,7 +39,7 @@ func getBotToken() (string, error) {
 	return secret.SecretString, nil
 }
 
-func handler(ctx context.Context, sqsEvent events.SQSEvent) error {
+func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 	token, err := getBotToken()
 	if err != nil {
 		log.Fatalf("failed to get bot token: %v", err)
@@ -52,9 +52,9 @@ func handler(ctx context.Context, sqsEvent events.SQSEvent) error {
 		return err
 	}
 
-	for _, message := range sqsEvent.Records {
+	for _, record := range kinesisEvent.Records {
 		var update tgbotapi.Update
-		if err := json.Unmarshal([]byte(message.Body), &update); err != nil {
+		if err := json.Unmarshal([]byte(record.Kinesis.Data), &update); err != nil {
 			log.Println(err)
 			continue
 		}

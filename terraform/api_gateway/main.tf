@@ -33,16 +33,18 @@ resource "aws_api_gateway_integration" "api_integration" {
   http_method             = aws_api_gateway_method.api_method.http_method
   integration_http_method = "POST"
   type                    = "AWS"
-  uri                     = "arn:aws:apigateway:${data.aws_region.current.name}:sqs:path/${data.aws_caller_identity.current.account_id}/${var.sqs_name}"
+  uri                     = "arn:aws:apigateway:${data.aws_region.current.name}:kinesis:action/PutRecord"
   credentials             = aws_iam_role.api_gateway_role.arn
   passthrough_behavior    = "NEVER"
 
-  request_parameters = {
-    "integration.request.header.Content-Type" = "'application/x-www-form-urlencoded'"
-  }
-
   request_templates = {
-    "application/json" = "Action=SendMessage&MessageBody=$input.body"
+    "application/json" = <<EOF
+{
+  "StreamName": "${var.stream_name}",
+  "PartitionKey": "$input.path('$.update_id')",
+  "Data": "$util.base64Encode($input.body)"
+}
+EOF
   }
 }
 

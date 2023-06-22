@@ -1,14 +1,14 @@
 variable "api_name" {
-    description = "The name of the API Gateway"
-    type        = string
+  description = "The name of the API Gateway"
+  type        = string
 }
 
-variable "sqs_name" {
-    description = "The name of the SQS queue"
-    type        = string
+variable "stream_name" {
+  description = "The name of the Kinesis stream"
+  type        = string
 }
 
-variable "sqs_arn" {
-    description = "The ARN of the SQS queue"
-    type        = string
+variable "stream_arn" {
+  description = "The ARN of the Kinesis stream"
+  type        = string
 }
