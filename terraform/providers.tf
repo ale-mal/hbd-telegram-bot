@@ -11,7 +11,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "local-dm-tfstate"
+    bucket = "playboy-millionaire-hbd"
     key    = "message_api_state/terraform.tfstate"
     region = "eu-central-1"
   }
