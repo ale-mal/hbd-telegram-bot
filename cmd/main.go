@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -56,11 +57,11 @@ func setCommandsMenu(bot *tgbotapi.BotAPI) error {
 	commands := []tgbotapi.BotCommand{
 		{
 			Command:     "register",
-			Description: "set the username",
+			Description: "set your username",
 		},
 		{
 			Command:     "team",
-			Description: "set the team",
+			Description: "set your team",
 		},
 		{
 			Command:     "code",
@@ -69,6 +70,14 @@ func setCommandsMenu(bot *tgbotapi.BotAPI) error {
 		{
 			Command:     "codes",
 			Description: "get the codes",
+		},
+		{
+			Command:     "what",
+			Description: "get the list of commands",
+		},
+		{
+			Command:     "whoami",
+			Description: "get your username and team",
 		},
 	}
 	if _, err := bot.Send(tgbotapi.NewSetMyCommands(commands...)); err != nil {
@@ -243,9 +252,33 @@ func getUsername(svc *dynamodb.DynamoDB, fromID int64) (string, error) {
 	return "", nil
 }
 
+func getTeam(svc *dynamodb.DynamoDB, fromID int64) (string, error) {
+	// check if the username with this fromID already exists
+	result, err := svc.GetItem(&dynamodb.GetItemInput{
+		TableName: aws.String("UserProfile"),
+		Key: map[string]*dynamodb.AttributeValue{
+			"from_id": {
+				N: aws.String(fmt.Sprint(fromID)),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("failed to get item: %v\n", err)
+		return "", err
+	}
+
+	if result.Item != nil {
+		if result.Item["team"] != nil {
+			return *result.Item["team"].S, nil
+		}
+	}
+
+	return "", nil
+}
+
 var adminSecret = "snakesnail"
 
-func updateAdmin(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID int64, secret string) error {
+func updateAdmin(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID int64, secret string, enabled bool) error {
 	if ok, err := isRegistered(svc, fromID); !ok || err != nil {
 		msg := tgbotapi.NewMessage(chatID, "Please register first")
 		bot.Send(msg)
@@ -269,7 +302,7 @@ func updateAdmin(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, cha
 		UpdateExpression: aws.String("set admin = :a"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
 			":a": {
-				BOOL: aws.Bool(true),
+				BOOL: aws.Bool(enabled),
 			},
 		},
 	})
@@ -278,7 +311,13 @@ func updateAdmin(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, cha
 		return err
 	}
 
-	msg := tgbotapi.NewMessage(chatID, "You are now an admin")
+	messageString := ""
+	if enabled {
+		messageString = "You are now an admin"
+	} else {
+		messageString = "You are not an admin anymore"
+	}
+	msg := tgbotapi.NewMessage(chatID, messageString)
 	bot.Send(msg)
 	return nil
 }
@@ -431,6 +470,12 @@ func sendCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID
 		return nil
 	}
 
+	if codeString == "" {
+		msg := tgbotapi.NewMessage(chatID, "Please provide a code")
+		bot.Send(msg)
+		return nil
+	}
+
 	dozorCode, err := getCode(svc, codeString)
 	if err != nil {
 		log.Printf("failed to get code: %v\n", err)
@@ -473,7 +518,11 @@ func sendCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID
 		return err
 	}
 
-	msg := tgbotapi.NewMessage(chatID, "Congratulations, "+username+"! You found the code "+codeString)
+	messageString := "Congratulations, " + username + "! You found the code " + codeString
+	if dozorCode.Hint != "" {
+		messageString += " with hint " + dozorCode.Hint
+	}
+	msg := tgbotapi.NewMessage(chatID, messageString)
 	bot.Send(msg)
 	return nil
 }
@@ -483,6 +532,12 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 		msg := tgbotapi.NewMessage(chatID, "Please register first")
 		bot.Send(msg)
 		return nil
+	}
+
+	isUserAdmin, err := isAdmin(svc, fromID)
+	if err != nil {
+		log.Printf("failed to check if user is admin: %v\n", err)
+		isUserAdmin = false
 	}
 
 	// get all codes
@@ -523,8 +578,14 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 		if dozorCodes == nil || len(dozorCodes) == 0 {
 			continue
 		}
-		codes += "Room " + room + ":\n"
+		codes += room + ":\n"
+		notFoundCount := 0
 		for _, dozorCode := range dozorCodes {
+			if !isUserAdmin && dozorCode.Username == "" {
+				notFoundCount++
+				continue
+			}
+
 			codes += dozorCode.Code + " "
 			if dozorCode.Username != "" {
 				codes += "found by " + dozorCode.Username + " "
@@ -532,7 +593,13 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 			if dozorCode.Hint != "" {
 				codes += "hint: " + dozorCode.Hint + " "
 			}
+			if isUserAdmin && dozorCode.Note != "" {
+				codes += "note: " + dozorCode.Note + " "
+			}
 			codes += "\n"
+		}
+		if notFoundCount > 0 {
+			codes += "Not found: " + strconv.Itoa(notFoundCount) + " codes\n"
 		}
 		codes += "\n"
 	}
@@ -616,6 +683,66 @@ func getCode(svc *dynamodb.DynamoDB, code string) (*DozorCode, error) {
 	return nil, nil
 }
 
+func getWaitingCommand(svc *dynamodb.DynamoDB, fromID int64, messageDate int) (string, error) {
+	result, err := svc.GetItem(&dynamodb.GetItemInput{
+		TableName: aws.String("WaitingCommand"),
+		Key: map[string]*dynamodb.AttributeValue{
+			"from_id": {
+				N: aws.String(fmt.Sprint(fromID)),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("failed to get item: %v\n", err)
+		return "", err
+	}
+	if result.Item == nil {
+		return "", nil
+	}
+
+	// get the command
+	command := ""
+	if result.Item["command"] != nil {
+		command = *result.Item["command"].S
+	}
+
+	// get the timestamp
+	timestamp := int64(0)
+	if result.Item["timestamp"] != nil {
+		timestampStr := ""
+		if result.Item["timestamp"] != nil {
+			timestampStr = *result.Item["timestamp"].N
+		}
+		// convert timestampStr to int64
+		t, err := strconv.ParseInt(timestampStr, 10, 64)
+		if err != nil {
+			log.Printf("failed to parse timestamp: %v\n", err)
+		} else {
+			timestamp = t
+		}
+	}
+
+	// remove the item from DynamoDB
+	_, err = svc.DeleteItem(&dynamodb.DeleteItemInput{
+		TableName: aws.String("WaitingCommand"),
+		Key: map[string]*dynamodb.AttributeValue{
+			"from_id": {
+				N: aws.String(fmt.Sprint(fromID)),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("failed to delete item: %v\n", err)
+	}
+
+	// check if the timestamp is less than 5 minutes
+	if timestamp+300 < int64(messageDate) {
+		return "", nil
+	}
+
+	return command, nil
+}
+
 func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 	token, err := getBotToken()
 	if err != nil {
@@ -656,56 +783,185 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 		}
 
 		if !update.Message.IsCommand() {
+			waitingCommand, err := getWaitingCommand(svc, update.Message.From.ID, update.Message.Date)
+			if err != nil {
+				log.Printf("failed to get waiting command: %v\n", err)
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+				bot.Send(msg)
+				continue
+			}
+			if waitingCommand == "" {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "I don't understand you")
+				bot.Send(msg)
+				continue
+			}
+			switch waitingCommand {
+			case "register":
+				err := registerUsername(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			case "team":
+				err := registerTeam(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			case "code":
+				err := sendCode(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			case "admin":
+				err := updateAdmin(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text, true)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			case "stopadmin":
+				err := updateAdmin(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text, false)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			case "addcode":
+				err := addCode(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			case "removecode":
+				err := removeCode(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text)
+				if err != nil {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					bot.Send(msg)
+				}
+			default:
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Wrong behavior. Cannot handle command "+waitingCommand+". Please contact the admin")
+				bot.Send(msg)
+			}
+
 			continue
 		}
 
+		waitingCommand := ""
+
 		switch update.Message.Command() {
+		case "start":
+			fallthrough
+		case "what":
+			messageString := "I can help you with the following commands:\n" +
+				"/register - set your username\n" +
+				"/team - set your team\n" +
+				"/code - send the code\n" +
+				"/codes - get the codes\n" +
+				"/whoami - get your username and team\n"
+			if ok, err := isAdmin(svc, update.Message.From.ID); ok && err == nil {
+				messageString += "/admin - become an admin\n" +
+					"/stopadmin - stop being an admin\n" +
+					"/addcode - add a code\n" +
+					"/removecode - remove a code\n"
+			}
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, messageString)
+			bot.Send(msg)
 		case "register":
-			err := registerUsername(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.CommandArguments())
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
-				bot.Send(msg)
-			}
+			waitingCommand = "register"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide your username")
+			bot.Send(msg)
 		case "team":
-			err := registerTeam(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.CommandArguments())
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
-				bot.Send(msg)
+			waitingCommand = "team"
+			teams := [][]tgbotapi.KeyboardButton{
+				{
+					tgbotapi.NewKeyboardButton("A"),
+					tgbotapi.NewKeyboardButton("B"),
+				},
+				{
+					tgbotapi.NewKeyboardButton("C"),
+					tgbotapi.NewKeyboardButton("D"),
+				},
 			}
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please choose your team")
+			msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(teams...)
+			bot.Send(msg)
 		case "code":
-			err := sendCode(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.CommandArguments())
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
-				bot.Send(msg)
-			}
+			waitingCommand = "code"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the code")
+			bot.Send(msg)
 		case "codes":
 			err := listCodes(bot, svc, update.Message.From.ID, update.Message.Chat.ID)
 			if err != nil {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
 				bot.Send(msg)
 			}
+		case "whoami":
+			username, err := getUsername(svc, update.Message.From.ID)
+			if err == nil {
+				if len(username) > 0 {
+					team, err := getTeam(svc, update.Message.From.ID)
+					if err == nil {
+						messageString := ""
+						if team != "" {
+							messageString = "You are " + username + " from team " + team
+						} else {
+							messageString = "You are " + username
+						}
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, messageString)
+						bot.Send(msg)
+					} else {
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+						bot.Send(msg)
+					}
+				} else {
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "You are not registered")
+					bot.Send(msg)
+				}
+			} else {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+				bot.Send(msg)
+			}
 		// admin commands
-		case "admin":
-			err := updateAdmin(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.CommandArguments())
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
-				bot.Send(msg)
-			}
 		case "addcode":
-			err := addCode(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.CommandArguments())
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
-				bot.Send(msg)
-			}
+			waitingCommand = "addcode"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the code, room, note and hint separated by spaces")
+			bot.Send(msg)
 		case "removecode":
-			err := removeCode(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.CommandArguments())
-			if err != nil {
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
-				bot.Send(msg)
-			}
+			waitingCommand = "removecode"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the code")
+			bot.Send(msg)
+		case "admin":
+			waitingCommand = "admin"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the secret")
+			bot.Send(msg)
+		case "stopadmin":
+			waitingCommand = "stopadmin"
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the secret")
+			bot.Send(msg)
 		default:
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "I don't know that command")
 			bot.Send(msg)
+		}
+
+		if waitingCommand != "" {
+			// save the command, fromID, chatID and timestamp to DynamoDB
+			_, err := svc.PutItem(&dynamodb.PutItemInput{
+				TableName: aws.String("WaitingCommand"),
+				Item: map[string]*dynamodb.AttributeValue{
+					"from_id": {
+						N: aws.String(fmt.Sprint(update.Message.From.ID)),
+					},
+					"command": {
+						S: aws.String(waitingCommand),
+					},
+					"timestamp": {
+						N: aws.String(fmt.Sprint(update.Message.Date)),
+					},
+				},
+			})
+			if err != nil {
+				log.Printf("failed to put item: %v\n", err)
+			}
 		}
 	}
 
