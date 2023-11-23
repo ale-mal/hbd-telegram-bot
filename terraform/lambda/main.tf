@@ -16,9 +16,14 @@ resource "aws_iam_policy" "additional_policy" {
       "Action": [
         "dynamodb:GetItem",
         "dynamodb:PutItem",
-        "dynamodb:UpdateItem"
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Scan"
       ],
-      "Resource": "arn:aws:dynamodb:eu-central-1:680324637652:table/users"
+      "Resource": [
+        "arn:aws:dynamodb:eu-central-1:680324637652:table/UserProfile",
+        "arn:aws:dynamodb:eu-central-1:680324637652:table/DozorCode"
+      ]
     }
   ]
 }
