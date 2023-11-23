@@ -202,6 +202,7 @@ func registerTeam(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, ch
 	}
 
 	msg := tgbotapi.NewMessage(chatID, "Welcome to team "+team+"!")
+	msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 	bot.Send(msg)
 	return nil
 }
@@ -787,11 +788,13 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 			if err != nil {
 				log.Printf("failed to get waiting command: %v\n", err)
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+				msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 				bot.Send(msg)
 				continue
 			}
 			if waitingCommand == "" {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "I don't understand you")
+				msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 				bot.Send(msg)
 				continue
 			}
@@ -806,6 +809,7 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 				err := registerTeam(bot, svc, update.Message.From.ID, update.Message.Chat.ID, update.Message.Text)
 				if err != nil {
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+					msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 					bot.Send(msg)
 				}
 			case "code":
@@ -944,7 +948,7 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 		}
 
 		if waitingCommand != "" {
-			// save the command, fromID, chatID and timestamp to DynamoDB
+			// save the command, fromID and timestamp to DynamoDB
 			_, err := svc.PutItem(&dynamodb.PutItemInput{
 				TableName: aws.String("WaitingCommand"),
 				Item: map[string]*dynamodb.AttributeValue{
