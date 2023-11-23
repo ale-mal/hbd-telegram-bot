@@ -4,10 +4,31 @@ resource "aws_iam_policy" "lambda_policy" {
   policy = data.aws_iam_policy_document.lambda_policy.json
 }
 
+resource "aws_iam_policy" "additional_policy" {
+  name   = "AdditionalPolicy"
+  path   = "/"
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:eu-central-1:680324637652:table/users"
+    }
+  ]
+}
+POLICY
+}
+
 resource "aws_iam_role" "lambda_role" {
   name                = "LambdaRole"
   assume_role_policy  = data.aws_iam_policy_document.assume_lambda_role.json
-  managed_policy_arns = [aws_iam_policy.lambda_policy.arn]
+  managed_policy_arns = [aws_iam_policy.lambda_policy.arn, aws_iam_policy.additional_policy.arn]
 }
 
 resource "aws_lambda_function" "lambda" {
