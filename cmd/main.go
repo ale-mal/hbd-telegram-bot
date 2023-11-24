@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -28,7 +29,6 @@ type DozorCode struct {
 	Room     string
 	Username string
 	Note     string
-	Hint     string
 }
 
 func getBotToken() (string, error) {
@@ -72,6 +72,10 @@ func setCommandsMenu(bot *tgbotapi.BotAPI) error {
 			Description: "get the codes",
 		},
 		{
+			Command:     "top",
+			Description: "get the top",
+		},
+		{
 			Command:     "what",
 			Description: "get the list of commands",
 		},
@@ -80,7 +84,7 @@ func setCommandsMenu(bot *tgbotapi.BotAPI) error {
 			Description: "get your username and team",
 		},
 	}
-	if _, err := bot.Send(tgbotapi.NewSetMyCommands(commands...)); err != nil {
+	if _, err := bot.Request(tgbotapi.NewSetMyCommands(commands...)); err != nil {
 		log.Printf("failed to set commands: %v\n", err)
 		return err
 	}
@@ -354,35 +358,32 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 		return nil
 	}
 
-	// command argument is "<code> <room> <note> <hint>"
-	// split it into parts
-	parts := make([]string, 0)
-	for len(commandArgument) > 0 {
-		spaceIndex := 0
-		for j, char := range commandArgument {
-			if char == ' ' {
-				spaceIndex = j
-				break
-			}
+	codeString, roomString, noteString := "", "", ""
+
+	// parse with delimeter '-'
+	if len(commandArgument) > 0 {
+		arguments := strings.Split(commandArgument, "-")
+		if len(arguments) > 0 {
+			codeString = strings.TrimSpace(arguments[0])
 		}
-		if spaceIndex == 0 {
-			parts = append(parts, commandArgument)
-			break
+		if len(arguments) > 1 {
+			roomString = strings.TrimSpace(arguments[1])
 		}
-		parts = append(parts, commandArgument[:spaceIndex])
-		commandArgument = commandArgument[spaceIndex+1:]
+		if len(arguments) > 2 {
+			noteString = strings.TrimSpace(arguments[2])
+		}
 	}
-	if len(parts) < 2 {
-		msg := tgbotapi.NewMessage(chatID, "Too few arguments. Please provide <code> <room> <note optional> <hint optional>")
+
+	if codeString == "" {
+		msg := tgbotapi.NewMessage(chatID, "Please provide a code")
 		bot.Send(msg)
 		return nil
 	}
-	codeString, roomString, noteString, hintString := parts[0], parts[1], "", ""
-	if len(parts) > 2 {
-		noteString = parts[2]
-	}
-	if len(parts) > 3 {
-		hintString = parts[3]
+
+	if roomString == "" {
+		msg := tgbotapi.NewMessage(chatID, "Please provide a room")
+		bot.Send(msg)
+		return nil
 	}
 
 	dozorCode, err := getCode(svc, codeString)
@@ -391,7 +392,7 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 		return err
 	}
 	if dozorCode != nil {
-		// update the code item with the room, note and hint
+		// update the code item with the room and note
 		_, err := svc.UpdateItem(&dynamodb.UpdateItemInput{
 			TableName: aws.String("DozorCode"),
 			Key: map[string]*dynamodb.AttributeValue{
@@ -399,16 +400,13 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 					S: aws.String(codeString),
 				},
 			},
-			UpdateExpression: aws.String("set room = :r, note = :n, hint = :h"),
+			UpdateExpression: aws.String("set room = :r, note = :n"),
 			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
 				":r": {
 					S: aws.String(roomString),
 				},
 				":n": {
 					S: aws.String(noteString),
-				},
-				":h": {
-					S: aws.String(hintString),
 				},
 			},
 		})
@@ -420,9 +418,6 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 		codeMessage := "Code " + codeString + " was updated with room " + roomString
 		if noteString != "" {
 			codeMessage += " with note " + noteString
-		}
-		if hintString != "" {
-			codeMessage += " with hint " + hintString
 		}
 		msg := tgbotapi.NewMessage(chatID, codeMessage)
 		bot.Send(msg)
@@ -440,9 +435,6 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 				"note": {
 					S: aws.String(noteString),
 				},
-				"hint": {
-					S: aws.String(hintString),
-				},
 			},
 		})
 		if err != nil {
@@ -453,9 +445,6 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 		codeMessage := "Code " + codeString + " was added to room " + roomString
 		if noteString != "" {
 			codeMessage += " with note " + noteString
-		}
-		if hintString != "" {
-			codeMessage += " with hint " + hintString
 		}
 		msg := tgbotapi.NewMessage(chatID, codeMessage)
 		bot.Send(msg)
@@ -493,13 +482,7 @@ func sendCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID
 		bot.Send(msg)
 	}
 
-	username, err := getUsername(svc, fromID)
-	if err != nil {
-		log.Printf("failed to get username: %v\n", err)
-		return err
-	}
-
-	// update the code with the username
+	// update the code with the fromID
 	_, err = svc.UpdateItem(&dynamodb.UpdateItemInput{
 		TableName: aws.String("DozorCode"),
 		Key: map[string]*dynamodb.AttributeValue{
@@ -507,10 +490,10 @@ func sendCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID
 				S: aws.String(codeString),
 			},
 		},
-		UpdateExpression: aws.String("set username = :u"),
+		UpdateExpression: aws.String("set from_id = :f"),
 		ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
-			":u": {
-				S: aws.String(username),
+			":f": {
+				N: aws.String(fmt.Sprint(fromID)),
 			},
 		},
 	})
@@ -519,10 +502,13 @@ func sendCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID
 		return err
 	}
 
-	messageString := "Congratulations, " + username + "! You found the code " + codeString
-	if dozorCode.Hint != "" {
-		messageString += " with hint " + dozorCode.Hint
+	username, err := getUsername(svc, fromID)
+	if err != nil {
+		log.Printf("failed to get username: %v\n", err)
+		return err
 	}
+
+	messageString := "Congratulations, " + username + "! You found the code " + codeString
 	msg := tgbotapi.NewMessage(chatID, messageString)
 	bot.Send(msg)
 	return nil
@@ -550,7 +536,7 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 		return err
 	}
 
-	dozorCodes := make(map[string][]*DozorCode)
+	dozorCodesByRoom := make(map[string][]*DozorCode)
 	for _, item := range result.Items {
 		dozorCode := &DozorCode{
 			Code: *item["code"].S,
@@ -558,24 +544,35 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 		if item["room"] != nil {
 			dozorCode.Room = *item["room"].S
 		}
-		if item["username"] != nil {
-			dozorCode.Username = *item["username"].S
+		if item["from_id"] != nil {
+			fromIDStr := *item["from_id"].N
+			// convert fromIDStr to int64
+			fromID, err := strconv.ParseInt(fromIDStr, 10, 64)
+			if err != nil {
+				log.Printf("failed to parse from_id: %v\n", err)
+			} else {
+				dozorCode.Username, err = getUsername(svc, fromID)
+				if err != nil {
+					log.Printf("failed to get username: %v\n", err)
+				}
+			}
 		}
 		if item["note"] != nil {
 			dozorCode.Note = *item["note"].S
 		}
-		if item["hint"] != nil {
-			dozorCode.Hint = *item["hint"].S
-		}
 		if dozorCode.Username != "" {
-			dozorCodes[dozorCode.Room] = append([]*DozorCode{dozorCode}, dozorCodes[dozorCode.Room]...)
+			// if the code was found by the user, put it first
+			dozorCodesByRoom[dozorCode.Room] = append([]*DozorCode{dozorCode}, dozorCodesByRoom[dozorCode.Room]...)
 		} else {
-			dozorCodes[dozorCode.Room] = append(dozorCodes[dozorCode.Room], dozorCode)
+			// if the code was not found by the user, put it last
+			dozorCodesByRoom[dozorCode.Room] = append(dozorCodesByRoom[dozorCode.Room], dozorCode)
 		}
 	}
 
 	codes := ""
-	for room, dozorCodes := range dozorCodes {
+	foundCount := 0
+	totalCount := 0
+	for room, dozorCodes := range dozorCodesByRoom {
 		if dozorCodes == nil || len(dozorCodes) == 0 {
 			continue
 		}
@@ -591,13 +588,15 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 			if dozorCode.Username != "" {
 				codes += "found by " + dozorCode.Username + " "
 			}
-			if dozorCode.Hint != "" {
-				codes += "hint: " + dozorCode.Hint + " "
-			}
 			if isUserAdmin && dozorCode.Note != "" {
 				codes += "note: " + dozorCode.Note + " "
 			}
 			codes += "\n"
+
+			if dozorCode.Username != "" {
+				foundCount++
+			}
+			totalCount++
 		}
 		if notFoundCount > 0 {
 			codes += "Not found: " + strconv.Itoa(notFoundCount) + " codes\n"
@@ -605,8 +604,124 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 		codes += "\n"
 	}
 
+	codes = "Found: " + strconv.Itoa(foundCount) + " codes\n" +
+		"Left: " + strconv.Itoa(totalCount-foundCount) + " codes\n" +
+		"Total: " + strconv.Itoa(totalCount) + " codes\n\n" +
+		codes
+
 	msg := tgbotapi.NewMessage(chatID, codes)
 	bot.Send(msg)
+	return nil
+}
+
+type TopEntry struct {
+	Username string
+	Teamname string
+	Count    int
+}
+
+func listTop(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID int64) error {
+	if ok, err := isRegistered(svc, fromID); !ok || err != nil {
+		msg := tgbotapi.NewMessage(chatID, "Please register first")
+		bot.Send(msg)
+		return nil
+	}
+
+	// get all codes
+	result, err := svc.Scan(&dynamodb.ScanInput{
+		TableName: aws.String("DozorCode"),
+	})
+	if err != nil {
+		log.Printf("failed to scan table: %v\n", err)
+		return err
+	}
+
+	dozorCodesByUser := make(map[string][]*DozorCode)
+	for _, item := range result.Items {
+		dozorCode := &DozorCode{
+			Code: *item["code"].S,
+		}
+		if item["room"] != nil {
+			dozorCode.Room = *item["room"].S
+		}
+		if item["from_id"] != nil {
+			fromIDStr := *item["from_id"].N
+			// convert fromIDStr to int64
+			fromID, err := strconv.ParseInt(fromIDStr, 10, 64)
+			if err != nil {
+				log.Printf("failed to parse from_id: %v\n", err)
+			} else {
+				dozorCode.Username, err = getUsername(svc, fromID)
+				if err != nil {
+					log.Printf("failed to get username: %v\n", err)
+				}
+			}
+		}
+		if item["note"] != nil {
+			dozorCode.Note = *item["note"].S
+		}
+		if dozorCode.Username != "" {
+			dozorCodesByUser[dozorCode.Username] = append(dozorCodesByUser[dozorCode.Username], dozorCode)
+		}
+	}
+
+	if len(dozorCodesByUser) == 0 {
+		msg := tgbotapi.NewMessage(chatID, "No codes were found yet")
+		bot.Send(msg)
+		return nil
+	}
+
+	topEntries := make([]*TopEntry, 0)
+	for username, dozorCodes := range dozorCodesByUser {
+		topEntries = append(topEntries, &TopEntry{
+			Username: username,
+			Count:    len(dozorCodes),
+		})
+	}
+
+	// sort topEntries by count
+	for i := 0; i < len(topEntries); i++ {
+		for j := i + 1; j < len(topEntries); j++ {
+			if topEntries[i].Count < topEntries[j].Count {
+				topEntries[i], topEntries[j] = topEntries[j], topEntries[i]
+			}
+		}
+	}
+
+	// find the team for each user
+	for _, topEntry := range topEntries {
+		result, err := svc.Scan(&dynamodb.ScanInput{
+			TableName:        aws.String("UserProfile"),
+			FilterExpression: aws.String("username = :u"),
+			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
+				":u": {
+					S: aws.String(topEntry.Username),
+				},
+			},
+		})
+		if err != nil {
+			log.Printf("failed to scan table: %v\n", err)
+			continue
+		}
+		if len(result.Items) > 0 {
+			if result.Items[0]["team"] != nil {
+				topEntry.Teamname = *result.Items[0]["team"].S
+			}
+		}
+	}
+
+	top := ""
+	for i, topEntry := range topEntries {
+		top += strconv.Itoa(i+1) + ". " + topEntry.Username + " " + strconv.Itoa(topEntry.Count)
+		if topEntry.Teamname != "" {
+			top += " (team " + topEntry.Teamname + ")"
+		}
+		top += "\n"
+	}
+
+	msg := tgbotapi.NewMessage(chatID, top)
+	bot.Send(msg)
+
 	return nil
 }
 
@@ -669,14 +784,21 @@ func getCode(svc *dynamodb.DynamoDB, code string) (*DozorCode, error) {
 		if result.Item["room"] != nil {
 			dozorCode.Room = *result.Item["room"].S
 		}
-		if result.Item["username"] != nil {
-			dozorCode.Username = *result.Item["username"].S
-		}
 		if result.Item["note"] != nil {
 			dozorCode.Note = *result.Item["note"].S
 		}
-		if result.Item["hint"] != nil {
-			dozorCode.Hint = *result.Item["hint"].S
+		if result.Item["from_id"] != nil {
+			fromIDStr := *result.Item["from_id"].N
+			// convert fromIDStr to int64
+			fromID, err := strconv.ParseInt(fromIDStr, 10, 64)
+			if err != nil {
+				log.Printf("failed to parse from_id: %v\n", err)
+			} else {
+				dozorCode.Username, err = getUsername(svc, fromID)
+				if err != nil {
+					log.Printf("failed to get username: %v\n", err)
+				}
+			}
 		}
 		return dozorCode, nil
 	}
@@ -772,6 +894,10 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 			continue
 		}
 
+		if update.Message == nil {
+			continue
+		}
+
 		// send greeting message for a new user
 		if update.Message.NewChatMembers != nil {
 			for _, member := range update.Message.NewChatMembers {
@@ -861,6 +987,7 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 				"/team - set your team\n" +
 				"/code - send the code\n" +
 				"/codes - get the codes\n" +
+				"/top - get the top\n" +
 				"/whoami - get your username and team\n"
 			if ok, err := isAdmin(svc, update.Message.From.ID); ok && err == nil {
 				messageString += "/admin - become an admin\n" +
@@ -899,6 +1026,12 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
 				bot.Send(msg)
 			}
+		case "top":
+			err := listTop(bot, svc, update.Message.From.ID, update.Message.Chat.ID)
+			if err != nil {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Something went wrong. Error: "+err.Error())
+				bot.Send(msg)
+			}
 		case "whoami":
 			username, err := getUsername(svc, update.Message.From.ID)
 			if err == nil {
@@ -928,7 +1061,7 @@ func handler(ctx context.Context, kinesisEvent events.KinesisEvent) error {
 		// admin commands
 		case "addcode":
 			waitingCommand = "addcode"
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the code, room, note and hint separated by spaces")
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Please provide the code, room and note separated by spaces")
 			bot.Send(msg)
 		case "removecode":
 			waitingCommand = "removecode"
