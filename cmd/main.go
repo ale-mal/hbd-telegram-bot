@@ -418,63 +418,37 @@ func addCode(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatID 
 		return err
 	}
 	if dozorCode != nil {
-		// update the code item with the room and note
-		_, err := svc.UpdateItem(&dynamodb.UpdateItemInput{
-			TableName: aws.String("DozorCode"),
-			Key: map[string]*dynamodb.AttributeValue{
-				"code": {
-					S: aws.String(codeString),
-				},
-			},
-			UpdateExpression: aws.String("set room = :r, note = :n"),
-			ExpressionAttributeValues: map[string]*dynamodb.AttributeValue{
-				":r": {
-					S: aws.String(roomString),
-				},
-				":n": {
-					S: aws.String(noteString),
-				},
-			},
-		})
-		if err != nil {
-			log.Printf("failed to update item: %v\n", err)
-			return err
-		}
-
-		codeMessage := "Code " + codeString + " was updated with room " + roomString
-		if noteString != "" {
-			codeMessage += " with note " + noteString
-		}
-		msg := tgbotapi.NewMessage(chatID, codeMessage)
+		msg := tgbotapi.NewMessage(chatID, "Code "+codeString+" already exists. Please delete it or use another code")
 		bot.Send(msg)
-	} else {
-		// create a new code item
-		_, err = svc.PutItem(&dynamodb.PutItemInput{
-			TableName: aws.String("DozorCode"),
-			Item: map[string]*dynamodb.AttributeValue{
-				"code": {
-					S: aws.String(codeString),
-				},
-				"room": {
-					S: aws.String(roomString),
-				},
-				"note": {
-					S: aws.String(noteString),
-				},
-			},
-		})
-		if err != nil {
-			log.Printf("failed to put item: %v\n", err)
-			return err
-		}
-
-		codeMessage := "Code " + codeString + " was added to room " + roomString
-		if noteString != "" {
-			codeMessage += " with note " + noteString
-		}
-		msg := tgbotapi.NewMessage(chatID, codeMessage)
-		bot.Send(msg)
+		return nil
 	}
+
+	// create a new code item
+	_, err = svc.PutItem(&dynamodb.PutItemInput{
+		TableName: aws.String("DozorCode"),
+		Item: map[string]*dynamodb.AttributeValue{
+			"code": {
+				S: aws.String(codeString),
+			},
+			"room": {
+				S: aws.String(roomString),
+			},
+			"note": {
+				S: aws.String(noteString),
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("failed to put item: %v\n", err)
+		return err
+	}
+
+	codeMessage := "Code " + codeString + " was added to room " + roomString
+	if noteString != "" {
+		codeMessage += " with note " + noteString
+	}
+	msg := tgbotapi.NewMessage(chatID, codeMessage)
+	bot.Send(msg)
 
 	return nil
 }
@@ -607,6 +581,7 @@ func listCodes(bot *tgbotapi.BotAPI, svc *dynamodb.DynamoDB, fromID int64, chatI
 		for _, dozorCode := range dozorCodes {
 			if !isUserAdmin && dozorCode.Username == "" {
 				notFoundCount++
+				totalCount++
 				continue
 			}
 
